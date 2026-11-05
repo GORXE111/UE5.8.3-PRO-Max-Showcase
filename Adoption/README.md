@@ -55,7 +55,27 @@ Android 自有 APK 改用 `-Platform Android`，并以 `-InfrastructureRoot` 指
 
 `project-inputs-inspected` 表示所选静态检查已通过。查看 JSON 中的 `engine` 和 `projectIntegration`，可以分别处理引擎和游戏项目的阻断项。若只需检查项目，可单独运行 `Test-ProjectIntegration.ps1`。完整流程见[运行时手册](RUNTIME.md)。
 
-在已有 PRO Max 5.8.3 开发安装上，公开脚手架生成的空白工程已实际通过 `SampleGameEditor Win64 Development` 编译。生成的 DLL 对应安装版的编辑器 Build ID。Cook、打包启动、官方 Launcher UE 的项目编译，以及安卓设备运行各自需要验收。
+在已有 PRO Max 5.8.3 开发安装上，公开脚手架生成的空白工程已实际通过 `SampleGameEditor Win64 Development` 编译，DLL 对应安装版的编辑器 Build ID。官方 Launcher UE 的项目编译及安卓设备运行各自需要验收。
+
+## 跑一次 Win64 包体验收
+
+准备可编译 Win64 项目的 UE 5.8.3 Installed Build、固定版本的基础设施仓库和上一步的 Python 环境。输出使用一个全新的短英文路径。以下是使用团队 Clang 安装版的例子。
+
+```powershell
+pwsh -NoProfile -File .\Adoption\Invoke-Win64PackageSmoke.ps1 `
+  -EngineRoot 'C:\UE583' -InfrastructureRoot 'C:\Work\UE-Infrastructure' `
+  -OutputDirectory 'C:\Work\UE-Package-Smoke-01' `
+  -PythonExecutable 'C:\Work\ue-adoption-venv\Scripts\python.exe' `
+  -ClangRoot 'C:\LLVM' -MaxParallelActions 1
+```
+
+脚本在输出目录生成样板，编译编辑器模块，再用 UAT Cook、Stage、打包和归档。归档游戏以 NullRHI 启动。烟测模块在指定地图实际进入游戏状态后写标记并退出。`win64-package-smoke-passed` 要求 UAT 和游戏都退出为 0，归档含 PAK，且游戏日志有就绪和正常退出记录。`blocked` 报告失败阶段，日志保留在输出目录。
+
+首次 Cook 可能需要编译全局着色器。`-MaxParallelActions` 控制 UBT 编译任务数，Cook 的着色器工作进程由引擎另行调度。
+
+2026 年 11 月 5 日在本机 PRO Max 5.8.3 开发安装上实测通过。编辑器编译、UAT 和归档游戏退出码均为 0。游戏实际挂载 `SampleGame-Windows.pak`，加载 `/Engine/Maps/Entry` 并正常退出，独立 UnrealPak 列表也确认该地图在 PAK 内。
+
+这一步验收最小 Win64 Development 包体。正式游戏的签名更新、资源版本确认、旧存档回退、图形渲染及安卓设备运行继续按[运行时手册](RUNTIME.md)验证。
 
 ## 让 AI 接手集成
 

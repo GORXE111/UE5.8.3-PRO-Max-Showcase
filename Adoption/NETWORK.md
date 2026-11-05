@@ -75,3 +75,15 @@ pwsh -NoProfile -File .\Adoption\Test-Download.ps1 `
 ```
 
 `verified` 表示 HEAD、206、首段字节与完整 GET 一致，整包大小和摘要与发布计划一致。`blocked` 返回退出码 1 及失败阶段。脚本走直连 HTTPS 并使用系统证书信任，验证消耗一次完整下载的流量。用实际测试域名单独验收 DNS、CDN 规则、源站隔离及发布器的整批读回。
+
+联合更新的测试渠道指针切换后，用签名生产器生成的本地副本检查活动清单、签名与指定版本目录是否一致。
+
+```powershell
+pwsh -NoProfile -File .\Adoption\Test-ReleaseFeed.ps1 `
+  -UpdatesUri 'https://updates.example.com/samplegame/v107-release-pc/updates/' `
+  -ReleaseId 123 `
+  -ManifestPath 'C:\Work\PreparedUpdate\payload\manifest.json' `
+  -SignaturePath 'C:\Work\PreparedUpdate\payload\manifest.json.sig'
+```
+
+把域名、渠道、编号和输入路径换成这次测试发布的冻结值。探针确认当前与版本化清单及签名的字节匹配，并检查缓存头。客户端验签和发行全量文件读回仍各自作为上线门槛。

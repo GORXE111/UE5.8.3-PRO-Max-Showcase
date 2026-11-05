@@ -11,5 +11,9 @@
 !/Adoption/Start-UEAdoption.ps1
 !/Adoption/Test-ProjectIntegration.ps1
 !/Adoption/Test-Download.ps1
+!/Adoption/Test-ReleaseFeed.ps1
+!/Adoption/Invoke-Win64PackageSmoke.ps1
+!/Adoption/Win64Smoke/
+!/Adoption/Win64Smoke/SampleGame.cpp
 !/Adoption/NETWORK.md
 !/Adoption/RUNTIME.md

@@ -4,6 +4,8 @@
 
 在自己的工程开始构建前，按[真实项目检查](README.md#检查真实项目)运行联合预检。项目检查的 `runtimeValidated` 保持为 `false`。即使源码中找到就绪确认相关标记，也需要下文的真实启动和回退证据。
 
+若要先排除 Win64 引擎或打包工具链的问题，可运行[最小包体验收](README.md#跑一次-win64-包体验收)，确认实际 Cook、PAK 挂载及游戏启动，再移入自己的工程。
+
 ## 1. 让基包先独立启动
 
 1. 用匹配的 UE 版本构建一个最小 C++ 工程，加入可操作的启动地图和一个测试存档槽。增加一个只能由新内容实现的可观察标记，例如可加载地图的内容版本。使用 Unreal Automation Tool 或编辑器完成 Build、Cook、Stage、Package，从生成的目录实际启动。记录工程提交、引擎 Build ID、平台、配置、地图清单、APK 包名或 Windows 目标名。 [Epic 打包指南](https://dev.epicgames.com/documentation/en-us/unreal-engine/packaging-your-project)
