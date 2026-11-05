@@ -77,7 +77,7 @@ pwsh -NoProfile -File .\Adoption\Invoke-Win64PackageSmoke.ps1 `
 
 `-VerifyNativeAssetUpdate` 需要 Installed Build 中的 Python Editor Script Plugin。它为 100、101、102 分别编译 EXE，并用 UE 编辑器生成同路径的 DataTable。每版单独 Cook 和打包，候选复用增量 Cook。脚本锁定基包 100 的清单摘要，用一次性的 Ed25519 密钥签发候选。真实 UE 进程在地图开始运行后读取 PAK 内的表，核对 C++、表和启动票据的版本。102 写入自己的存档副本后故意退出，下一次启动重新加载 101 的 EXE、PAK 与存档，并逐字节核对原存档。
 
-`SignedUpdate/report.json` 保存每版 EXE 和 PAK 的 SHA-256、实际运行的 C++ 与资产版本、进程退出状态和存档代次。每次启动的日志在 `SignedUpdate/store/boots` 下。若只验收签名与回退，可改用 `-VerifySignedUpdate`，三版共用一套 EXE 和 PAK。省略两种开关时只验收最小包体启动。
+`-VerifyNativeAssetUpdate` 也会在独立安装中验收一次错配。用有效测试签名提交 101 的 EXE 和 100 的 PAK，要求 UE 在改写存档前拒绝确认，并重新启动 100。`SignedUpdate/report.json` 保存每版 EXE 和 PAK 的 SHA-256、实际运行的 C++ 与资产版本、进程退出状态和存档代次。正常更新和错配测试的日志分别保存在 `SignedUpdate/store/boots` 和 `SignedUpdate/mismatched-pair`。若只验收签名与回退，可改用 `-VerifySignedUpdate`，三版共用一套 EXE 和 PAK。省略两种开关时只验收最小包体启动。
 
 要复测已有的三份样板归档，可以跳过重新 Cook 和打包，直接运行以下命令。输出应使用全新短英文路径，预留约四倍单个包体大小另加 128 MiB 的磁盘空间，完成后保留三个版本和验收证据。
 
@@ -86,11 +86,27 @@ python -X utf8 -B .\Adoption\Win64Smoke\verify_update.py `
   --archive 'C:\Work\UE-Package-Smoke-01\Archive\Windows' `
   --candidate-archive '101=C:\Work\UE-Package-Smoke-01\Archive-101\Windows' `
   --candidate-archive '102=C:\Work\UE-Package-Smoke-01\Archive-102\Windows' `
+  --verify-mismatched-pair `
   --infrastructure 'C:\Work\UE-Infrastructure' `
   --output 'C:\Work\UE-Update-Smoke-02'
 ```
 
 此验收使用测试 DataTable 和固定 schema 的存档。真实项目需按[运行时手册](RUNTIME.md)验证目标玩法、反射布局、存档迁移、线上下载及 Android 运行。
+
+## 复用包体验收本机 HTTPS 更新
+
+用上一步的三份归档运行参考 Windows 客户端的真实下载器。脚本在 `127.0.0.1:443` 临时提供 HTTPS 清单、签名和版本文件，端口需要空闲。测试证书仅对脚本进程生效。输出使用全新短英文目录，并预留约六倍单个包体大小另加 128 MiB。
+
+```powershell
+python -X utf8 -B .\Adoption\Win64Smoke\verify_feed.py `
+  --archive-100 'C:\Work\UE-Package-Smoke-01\Archive\Windows' `
+  --archive-101 'C:\Work\UE-Package-Smoke-01\Archive-101\Windows' `
+  --archive-102 'C:\Work\UE-Package-Smoke-01\Archive-102\Windows' `
+  --infrastructure 'C:\Work\UE-Infrastructure' `
+  --output 'C:\Work\UE-Https-Smoke-01'
+```
+
+验收覆盖下载损坏时拒绝激活、修正后重试成功、故障候选回退及原存档恢复。`report.json` 保存请求与已发送字节、游戏启动回执和恢复结果。公网 DNS、CDN 缓存、外网下载及带宽仍按[网络手册](NETWORK.md)验收。
 
 ## 让 AI 接手集成
 

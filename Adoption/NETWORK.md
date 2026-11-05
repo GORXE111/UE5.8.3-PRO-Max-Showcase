@@ -30,7 +30,7 @@
 | `/samplegame/players/releases/<id>/...` | Windows ZIP、Android APK 和对应 SHA-256 文件。核对 HEAD、整包 GET 和有效的 206 Range 响应 |
 | 未发布路径、暂存路径及写请求 | 暂存目录不对外路由，缺失路径返回 404 且不缓存。POST、PUT 等写请求被拒绝 |
 
-安装包和资源按原始字节传输。验证完整 GET 的 `Content-Length` 和 SHA-256，禁止 CDN 对签名资源重压缩或改写。合法 Range 要核对 `Content-Range` 和返回的切片字节。网关能返回 206 只证明服务器支持 Range。当前公开样例的联合更新客户端可复用已通过摘要校验的完整文件，未完成的单文件还需要重新下载。逐字节续传另做客户端验收。 [HTTP Range 规范](https://www.rfc-editor.org/rfc/rfc9110.html#section-14) · [缓存策略规范](https://www.rfc-editor.org/rfc/rfc9111.html) · [不可变响应规范](https://www.rfc-editor.org/rfc/rfc8246.html)
+安装包和资源按原始字节传输。验证完整 GET 的 `Content-Length` 和 SHA-256，禁止 CDN 对签名资源重压缩或改写。合法 Range 要核对 `Content-Range` 和返回的切片字节。网关能返回 206 只证明服务器支持 Range。当前公开样例的联合更新客户端可复用已通过摘要校验的完整文件，未完成的单文件还需要重新下载。可先用[本机 HTTPS 更新验收](README.md#复用包体验收本机-https-更新)检查损坏重试和版本恢复。逐字节续传及公网缓存另做验收。 [HTTP Range 规范](https://www.rfc-editor.org/rfc/rfc9110.html#section-14) · [缓存策略规范](https://www.rfc-editor.org/rfc/rfc9111.html) · [不可变响应规范](https://www.rfc-editor.org/rfc/rfc8246.html)
 
 以最大真实包和至少两个网络环境测冷缓存与热缓存，记录响应状态、回源率、吞吐、耗时和截断失败。选 CDN 时核对当前套餐的最大缓存对象、Range 行为和流量预算。大文件走对象存储时，可将它放到相同下载域名的后端路由中，保留当前发布器的同源、无重定向校验。即使边缘不能缓存某个大包，也要以真实整包 GET 判定能否交付。 [Cloudflare Range 行为参考](https://developers.cloudflare.com/cache/reference/range-requests/)
 

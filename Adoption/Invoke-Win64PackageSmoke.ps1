@@ -178,6 +178,7 @@ bGenerateChunks=False
     if ($VerifySignedUpdate -or $VerifyNativeAssetUpdate) {
         $variantArgs = @()
         if ($VerifyNativeAssetUpdate) {
+            $variantArgs += '--verify-mismatched-pair'
             foreach ($release in @(101, 102)) {
                 $candidate = Build-Package (Join-Path $output "Archive-$release") "-$release" $release
                 $variantArgs += @('--candidate-archive', "$release=$candidate")
@@ -193,7 +194,8 @@ bGenerateChunks=False
         $report.signedUpdateReport = Join-Path $updateOutput 'report.json'
         $signed = Get-Content -LiteralPath $report.signedUpdateReport -Raw | ConvertFrom-Json
         if ($signed.status -cne 'win64-signed-update-passed' -or
-            ($VerifyNativeAssetUpdate -and $signed.sameExeAndPaksAcrossReleases -ne $false)) {
+            ($VerifyNativeAssetUpdate -and ($signed.sameExeAndPaksAcrossReleases -ne $false -or
+                $signed.mismatchedPair.status -cne 'signed-mismatched-pair-rejected'))) {
             throw 'Signed update verification did not report success.'
         }
         $report.status = 'win64-signed-update-passed'

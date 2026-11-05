@@ -98,8 +98,7 @@ def save_bytes(selected, sets):
     return sets.read_bounded(sets.child(selected["savesRoot"], SAVE), 16)
 
 
-def verify_boot(store, selected, release, player, sets, expected_pair):
-    require(selected["reference"]["releaseId"] == release, f"Expected release {release} at boot")
+def launch_expected(store, selected, player, expected_exit):
     process = None
     watchdog = None
 
@@ -116,16 +115,33 @@ def verify_boot(store, selected, release, player, sets, expected_pair):
     try:
         player.launch(store, selected, user_args=GAME_FLAGS, popen=start, startup_timeout=120)
     except ValueError as error:
-        if release != 102 or str(error) != "Selected game exited with status 42":
+        if expected_exit == 0 or str(error) != f"Selected game exited with status {expected_exit}":
             raise
     finally:
         if watchdog is not None:
             watchdog.cancel()
             watchdog.join()
+    require(process is not None and process.returncode == expected_exit,
+            f"Selected game did not exit with status {expected_exit}")
+    return process.pid
 
+
+def boot_evidence(store, selected, sets):
     boot = sets.child(store.root, f"boots/{selected['attemptId']}")
     result = sets.parse(sets.read_bounded(boot / "result.json", 16384), 16384)
     log = sets.read_bounded(boot / "game.log", 8 * 1024**2).decode("utf-8-sig", errors="replace")
+    return boot, result, log
+
+
+def verify_boot(store, selected, release, player, sets, expected_pair):
+    require(selected["reference"]["releaseId"] == release, f"Expected release {release} at boot")
+    pid = launch_expected(store, selected, player, 42 if release == 102 else 0)
+    return inspect_boot(store, selected, release, player, sets, expected_pair, pid)
+
+
+def inspect_boot(store, selected, release, player, sets, expected_pair, pid=None):
+    expected_exit = 42 if release == 102 else 0
+    boot, result, log = boot_evidence(store, selected, sets)
     files = selected["manifest"]["files"]
     require(any(f"Mounted Pak file '../../../{item['path']}'" in log for item in files
                 if item["role"] == "content" and (expected_pair is None or item["path"] == MAIN_PAK)),
@@ -146,9 +162,6 @@ def verify_boot(store, selected, release, player, sets, expected_pair):
     require(written_save == f"{release}\n".encode("ascii"),
             f"Release {release} did not write its expected save bytes")
 
-    expected_exit = 42 if release == 102 else 0
-    require(process is not None and process.returncode == expected_exit,
-            f"Release {release} did not exit with status {expected_exit}")
     ack_path = boot / "health.json"
     if release == 102:
         require(result == {"status": "rolled-back", "reason": "Selected game exited with status 42"}
@@ -157,7 +170,9 @@ def verify_boot(store, selected, release, player, sets, expected_pair):
     else:
         ticket = sets.parse(sets.read_bounded(boot / "ticket.json", 8192), 8192)
         ack = json.loads(sets.read_bounded(ack_path, 8192).decode("utf-8"))
-        player.acknowledgement(ack, ticket, process.pid)
+        # The production player has already validated the actual child PID in its result.
+        if pid is not None:
+            player.acknowledgement(ack, ticket, pid)
         require(result == {"status": "confirmed", "exitCode": 0, "health": ack}
                 and ack["luaVersion"] == f"adoption-sample-{release}", "Missing confirmed sample health")
         require(f"UE_ADOPTION_UPDATE_SMOKE_HEALTHY release={release}" in log and "LogExit: Exiting." in log,
@@ -168,7 +183,83 @@ def verify_boot(store, selected, release, player, sets, expected_pair):
                 evidence=boot.relative_to(store.root.parent).as_posix(), launcherStatus=result["status"], **pair_evidence)
 
 
-def run(archives, infrastructure, output, report):
+def copy_payload(archive, source, records, sets, pak_archive=None):
+    for item in records:
+        path = item["path"]
+        origin = pak_archive if pak_archive is not None and path == MAIN_PAK else archive
+        target = sets.child(source, path)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        sets.copy_verified_payload(sets.child(origin, path), target, item)
+
+
+def verify_mismatched_pair(archives, base_records, mixed_records, pairs, trust, key, verifier, output, sets, player):
+    """A correctly signed candidate with the wrong cooked version must fail in the game."""
+    evidence = output / "mismatched-pair"
+    evidence.mkdir()
+    trust = dict(trust)
+    with TemporaryDirectory(prefix="mismatch-", dir=output) as scratch:
+        temporary = Path(scratch)
+        root = temporary / "store"
+        try:
+            with TemporaryDirectory(prefix="stage-", dir=temporary) as staging:
+                source = Path(staging)
+                copy_payload(archives[100], source, base_records, sets)
+                raw = fixture_manifest(source, base_records, trust, 100, pairs[100]["executableSha256"], sets)
+                trust["baseManifestSha256"] = hashlib.sha256(raw).hexdigest()
+                with sets.ReleaseSetStore(root, trust, verifier).lease() as store:
+                    store.initialize(source, raw)
+                    baseline = store.boot()
+                    verify_boot(store, baseline, 100, player, sets, pairs[100])
+
+            with TemporaryDirectory(prefix="stage-", dir=temporary) as staging:
+                source = Path(staging)
+                copy_payload(archives[101], source, mixed_records, sets, pak_archive=archives[100])
+                raw = fixture_manifest(source, mixed_records, trust, 101, pairs[101]["executableSha256"], sets)
+                signature = key.sign(raw)
+                (evidence / "manifest.json").write_bytes(raw)
+                (evidence / "manifest.sig").write_bytes(signature)
+                with sets.ReleaseSetStore(root, trust, verifier).lease() as store:
+                    store.stage(source, raw, signature)
+                    store.activate(101)
+                    mixed = store.boot()
+                    require(mixed["reference"]["releaseId"] == 101
+                            and mixed["reference"]["saveGeneration"] != baseline["reference"]["saveGeneration"]
+                            and save_bytes(mixed, sets) == b"100\n",
+                            "Signed mismatched candidate did not receive a fork of the base save")
+                    launch_expected(store, mixed, player, 1)
+                    boot, result, log = boot_evidence(store, mixed, sets)
+                    require(result == {"status": "rolled-back", "reason": "Selected game exited with status 1"}
+                            and not os.path.lexists(boot / "health.json"),
+                            "Signed mismatched candidate did not roll back before health")
+                    require(f"Mounted Pak file '../../../{MAIN_PAK}'" in log
+                            and "UE_ADOPTION_UPDATE_SMOKE_ERROR native=101 ticket=101 cooked=Release100" in log,
+                            "Game did not report the mismatched compiled and cooked versions")
+                    require(save_bytes(mixed, sets) == save_bytes(baseline, sets) == b"100\n",
+                            "Mismatch changed the inherited or original save")
+
+            with sets.ReleaseSetStore(root, trust, verifier).lease() as store:
+                recovered = store.boot()
+                require(recovered["reference"] == baseline["reference"] and save_bytes(recovered, sets) == b"100\n",
+                        "Cold recovery did not return to the base and its exact save generation")
+                verify_boot(store, recovered, 100, player, sets, pairs[100])
+                state = sets.parse(sets.read_bounded(root / "state.json", 65536), 65536)
+                require(state["active"] == baseline["reference"] and state["blocked"] == [101] and state["boot"] is None,
+                        "Release store did not block the mismatched candidate after recovery")
+        finally:
+            # Preserve launch evidence on success or failure without retaining another pair of packages.
+            for name in ("boots", "state.json"):
+                source = root / name
+                if source.exists():
+                    source.rename(evidence / name)
+
+    return dict(status="signed-mismatched-pair-rejected", nativeRelease=101, cookedRelease=100,
+                candidateExitCode=1, candidateHealthAcknowledged=False, recoveredRelease=100,
+                preservedSave=True, executableSha256=pairs[101]["executableSha256"], pakSha256=pairs[100]["pakSha256"],
+                baseAttemptId=baseline["attemptId"], candidateAttemptId=mixed["attemptId"],
+                recoveredAttemptId=recovered["attemptId"], evidence=evidence.relative_to(output).as_posix())
+
+
+def run(archives, infrastructure, output, report, check_mismatch):
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
     from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
@@ -177,8 +268,6 @@ def run(archives, infrastructure, output, report):
     inventories = {release: payload_inventory(path, sets) for release, path in archives.items()}
     base_records, base_size = inventories[100]
     sizes = [inventories.get(release, inventories[100])[1] for release in (100, 101, 102)]
-    require(shutil.disk_usage(output).free >= sum(sizes) + max(sizes) + FREE_RESERVE,
-            "Insufficient free space for three complete releases and one temporary staging copy")
     native_hash = next(item["sha256"] for item in base_records if item["path"] == ENTRY)
     pairs = {}
     if variant_mode:
@@ -192,6 +281,13 @@ def run(archives, infrastructure, output, report):
             require(len({pair[field] for pair in pairs.values()}) == len(pairs),
                     f"The base and both candidates must have distinct {field} values")
         report["releaseArchives"] = pairs
+    peak_bytes = sum(sizes) + max(sizes)
+    if check_mismatch:
+        base_pak = next(item for item in base_records if item["path"] == MAIN_PAK)
+        mixed_records = [base_pak if item["path"] == MAIN_PAK else item for item in inventories[101][0]]
+        peak_bytes = max(peak_bytes, base_size + 2 * sum(item["size"] for item in mixed_records))
+    require(shutil.disk_usage(output).free >= peak_bytes + FREE_RESERVE,
+            "Insufficient free space for complete releases and temporary staging")
     trust = dict(projectId="SampleGame", platform="Windows", channel="adoption-smoke", baseReleaseId=100,
                  engineBuildId="win64-adoption-fixture", shellCompatibilityId=native_hash, loaderVersion=1)
     private_key = Ed25519PrivateKey.generate()
@@ -199,6 +295,9 @@ def run(archives, infrastructure, output, report):
     verifier = sets.ed25519_verifier(public_key)
     report.update(infrastructureRevision=INFRASTRUCTURE_REVISION, publicKeyHex=public_key,
                   packagedExeSha256=native_hash, packagedPayloadBytes=base_size, sameExeAndPaksAcrossReleases=not variant_mode)
+    if check_mismatch:
+        report["mismatchedPair"] = verify_mismatched_pair(archives, base_records, mixed_records, pairs, trust,
+                                                        private_key, verifier, output, sets, player)
     store_root = output / "store"
 
     for release in (100, 101, 102):
@@ -207,10 +306,7 @@ def run(archives, infrastructure, output, report):
         release_native_hash = pairs[release]["executableSha256"] if variant_mode else native_hash
         with TemporaryDirectory(prefix="stage-", dir=output) as scratch:
             source = Path(scratch)
-            for item in records:
-                target = sets.child(source, item["path"])
-                target.parent.mkdir(parents=True, exist_ok=True)
-                sets.copy_verified_payload(sets.child(archive, item["path"]), target, item)
+            copy_payload(archive, source, records, sets)
             raw = fixture_manifest(source, records, trust, release, release_native_hash, sets)
             if release == 100:
                 trust["baseManifestSha256"] = hashlib.sha256(raw).hexdigest()
@@ -248,6 +344,8 @@ def main():
     parser.add_argument("--archive", type=Path, required=True, help="UAT Archive/Windows for the adoption sample")
     parser.add_argument("--candidate-archive", action="append", default=[], metavar="RELEASE=PATH",
                         help="UAT Archive/Windows for a different build; supply both 101=PATH and 102=PATH")
+    parser.add_argument("--verify-mismatched-pair", action="store_true",
+                        help="Also sign and reject release 101's EXE paired with release 100's PAK")
     parser.add_argument("--infrastructure", type=Path, required=True, help="Pinned infrastructure checkout")
     parser.add_argument("--output", type=Path, required=True, help="New directory for the disposable store and report")
     args = parser.parse_args()
@@ -264,6 +362,8 @@ def main():
             require(release_id not in archives, f"Duplicate archive for release {release_id}")
             archives[release_id] = Path(path).absolute()
         require(len(archives) in {1, 3}, "Supply both candidate archives or neither")
+        require(not args.verify_mismatched_pair or len(archives) == 3,
+                "Mismatched-pair verification requires both candidate archives")
         infrastructure = args.infrastructure.resolve(strict=True)
         output = args.output.resolve()
         resolved_archives = {path.resolve(strict=True) for path in archives.values()}
@@ -272,7 +372,7 @@ def main():
                 "Output must be outside the archives and the infrastructure checkout")
         output.mkdir()
         output_created = True
-        run(archives, infrastructure, output, report)
+        run(archives, infrastructure, output, report, args.verify_mismatched_pair)
     except (OSError, ValueError, ImportError, subprocess.SubprocessError) as error:
         report.update(error=str(error))
     rendered = json.dumps(report, indent=2, ensure_ascii=True) + "\n"
