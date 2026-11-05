@@ -4,7 +4,7 @@
 
 在自己的工程开始构建前，按[真实项目检查](README.md#检查真实项目)运行联合预检。项目检查的 `runtimeValidated` 保持为 `false`。即使源码中找到就绪确认相关标记，也需要下文的真实启动和回退证据。
 
-若要先排除 Win64 引擎或打包工具链的问题，可运行[最小包体验收](README.md#跑一次-win64-包体验收)，确认实际 Cook、PAK 挂载及游戏启动，再移入自己的工程。
+先运行[最小包体验收](README.md#跑一次-win64-包体验收)，确认实际 Cook、PAK 挂载及游戏启动。加上 `-VerifySignedUpdate` 可复现 Windows 启动器验签、UE 进程确认候选、故障回退和存档隔离，再把流程移入自己的工程。
 
 ## 1. 让基包先独立启动
 
@@ -29,7 +29,7 @@
 3. 在候选存档代次上读写并完成迁移。游戏确认已加载新内容、可用的配置和正确存档后，才生成就绪记录。记录绑定本次 `attemptId`、`releaseId`、`manifestSha256`、`buildId`、进程 `pid`、`userRoot`、`saveSchema` 和 `luaVersion`。
 4. Windows 将记录原子写入票据的 `health.json` 路径，启动器在记录有效且游戏进程正常退出后确认。Android 由游戏侧代码通过 JNI 调用 `ReleasePlayer.acknowledge`，Android 引导层验证记录并确认后才允许检查更新。进入地图、进程仍在运行或收到任意健康文件都不足以确认。
 
-这里的公开实现提供选包、票据、回执校验与回退，真实游戏就绪适配器由接入项目实现。离线演示和主机替身只能证明协议事务，不作为 UE 已加载真实载荷的证据。 [更新与回退契约](https://github.com/GORXE111/UE-Game-Dev-Infrastructure/blob/2d0654e54b78aeed17161747c6deedb9dce3d0b1/docs/update-and-rollback.md)
+公开的 Win64 样板含可编译的就绪适配器。它在真实地图进入 BeginPlay 后检查签名载荷中的版本标记，并通过隔离用户目录验证存档。样板协议用 `adoption-sample-<releaseId>` 作为 `luaVersion` 测试值。接入项目须由自己的适配器读取实际内容和脚本版本，并按项目定义的就绪条件写入回执。 [更新与回退契约](https://github.com/GORXE111/UE-Game-Dev-Infrastructure/blob/2d0654e54b78aeed17161747c6deedb9dce3d0b1/docs/update-and-rollback.md)
 
 ## 3. 资源、脚本和配置按同一版本切换
 

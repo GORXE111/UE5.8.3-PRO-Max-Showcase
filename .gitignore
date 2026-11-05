@@ -15,5 +15,6 @@
 !/Adoption/Invoke-Win64PackageSmoke.ps1
 !/Adoption/Win64Smoke/
 !/Adoption/Win64Smoke/SampleGame.cpp
+!/Adoption/Win64Smoke/verify_update.py
 !/Adoption/NETWORK.md
 !/Adoption/RUNTIME.md

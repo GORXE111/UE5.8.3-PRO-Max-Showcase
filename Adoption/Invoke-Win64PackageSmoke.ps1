@@ -6,7 +6,8 @@ param(
     [Parameter(Mandatory)] [string] $OutputDirectory,
     [string] $PythonExecutable = 'python',
     [string] $ClangRoot,
-    [ValidateRange(1, 8)] [int] $MaxParallelActions = 2
+    [ValidateRange(1, 8)] [int] $MaxParallelActions = 2,
+    [switch] $VerifySignedUpdate
 )
 
 $ErrorActionPreference = 'Stop'
@@ -21,6 +22,7 @@ $report = [ordered]@{
     uatExitCode = $null
     gameExitCode = $null
     worldReady = $false
+    signedUpdateReport = $null
     outputDirectory = $null
     error = $null
 }
@@ -38,6 +40,7 @@ $previousLlvm = $env:LLVM_PATH
 try {
     if (-not $IsWindows) { throw 'The package smoke needs a Windows host and a Win64 Installed Build.' }
     $engine = Get-LocalPath $EngineRoot
+    $infrastructure = Get-LocalPath $InfrastructureRoot
     $output = Get-LocalPath $OutputDirectory
     if (Test-Path -LiteralPath $output) { throw 'Choose a new smoke output directory.' }
     if ($output -notmatch '^[ -~]+$') { throw 'Choose a short ASCII path for the package smoke.' }
@@ -64,7 +67,7 @@ try {
     $report.outputDirectory = (New-Item -Path $output -ItemType Directory).FullName
     $sampleRoot = Join-Path $output 'SampleGame'
     $adoption = & $runner -NoProfile -File (Join-Path $PSScriptRoot 'Start-UEAdoption.ps1') -EngineRoot $engine `
-        -LocalDemo -InfrastructureRoot (Get-LocalPath $InfrastructureRoot) -ProjectOutput $sampleRoot `
+        -LocalDemo -InfrastructureRoot $infrastructure -ProjectOutput $sampleRoot `
         -PythonExecutable $PythonExecutable
     $adoptionExit = $LASTEXITCODE
     $local = $adoption | ConvertFrom-Json
@@ -72,6 +75,12 @@ try {
     $report.infrastructureRevision = $local.infrastructureRevision
     $project = $local.generatedProject
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'Win64Smoke/SampleGame.cpp') -Destination (Join-Path $sampleRoot 'Source/SampleGame/SampleGame.cpp')
+    $moduleRules = Join-Path $sampleRoot 'Source/SampleGame/SampleGame.Build.cs'
+    $dependencies = '        PublicDependencyModuleNames.AddRange(new[] { "Core", "CoreUObject", "Engine" });'
+    $rules = Get-Content -LiteralPath $moduleRules -Raw
+    if (-not $rules.Contains($dependencies)) { throw 'Unexpected SampleGame module rules in the pinned scaffold.' }
+    Set-Content -LiteralPath $moduleRules -NoNewline -Value ($rules.Replace($dependencies,
+        "$dependencies`n        PrivateDependencyModuleNames.Add(`"Json`");"))
     $config = Join-Path $sampleRoot 'Config'
     [IO.Directory]::CreateDirectory($config) | Out-Null
     Set-Content -LiteralPath (Join-Path $config 'DefaultEngine.ini') -Value @"
@@ -133,8 +142,22 @@ bGenerateChunks=False
         throw 'Expected a ready game world and normal exit marker in packaged-game.log.'
     }
     $report.worldReady = $true
-    $report.phase = 'complete'
     $report.status = 'win64-package-smoke-passed'
+    if ($VerifySignedUpdate) {
+        $report.phase = 'signed-update'
+        $python = (Get-Command -Name $PythonExecutable -CommandType Application | Select-Object -First 1).Source
+        $updateOutput = Join-Path $output 'SignedUpdate'
+        $updateLog = Join-Path $output 'signed-update.log'
+        & $python -X utf8 -B (Join-Path $PSScriptRoot 'Win64Smoke/verify_update.py') `
+            --archive $payload --infrastructure $infrastructure --output $updateOutput *> $updateLog
+        if ($LASTEXITCODE -ne 0) { throw 'Signed update verification failed. See signed-update.log.' }
+        $report.signedUpdateReport = Join-Path $updateOutput 'report.json'
+        if ((Get-Content -LiteralPath $report.signedUpdateReport -Raw | ConvertFrom-Json).status -cne 'win64-signed-update-passed') {
+            throw 'Signed update verification did not report success.'
+        }
+        $report.status = 'win64-signed-update-passed'
+    }
+    $report.phase = 'complete'
 } catch {
     $report.status = 'blocked'
     $report.error = $_.Exception.Message

@@ -66,7 +66,7 @@ pwsh -NoProfile -File .\Adoption\Invoke-Win64PackageSmoke.ps1 `
   -EngineRoot 'C:\UE583' -InfrastructureRoot 'C:\Work\UE-Infrastructure' `
   -OutputDirectory 'C:\Work\UE-Package-Smoke-01' `
   -PythonExecutable 'C:\Work\ue-adoption-venv\Scripts\python.exe' `
-  -ClangRoot 'C:\LLVM' -MaxParallelActions 1
+  -ClangRoot 'C:\LLVM' -MaxParallelActions 1 -VerifySignedUpdate
 ```
 
 脚本在输出目录生成样板，编译编辑器模块，再用 UAT Cook、Stage、打包和归档。归档游戏以 NullRHI 启动。烟测模块在指定地图实际进入游戏状态后写标记并退出。`win64-package-smoke-passed` 要求 UAT 和游戏都退出为 0，归档含 PAK，且游戏日志有就绪和正常退出记录。`blocked` 报告失败阶段，日志保留在输出目录。
@@ -75,7 +75,18 @@ pwsh -NoProfile -File .\Adoption\Invoke-Win64PackageSmoke.ps1 `
 
 2026 年 11 月 5 日在本机 PRO Max 5.8.3 开发安装上实测通过。编辑器编译、UAT 和归档游戏退出码均为 0。游戏实际挂载 `SampleGame-Windows.pak`，加载 `/Engine/Maps/Entry` 并正常退出，独立 UnrealPak 列表也确认该地图在 PAK 内。
 
-这一步验收最小 Win64 Development 包体。正式游戏的签名更新、资源版本确认、旧存档回退、图形渲染及安卓设备运行继续按[运行时手册](RUNTIME.md)验证。
+`-VerifySignedUpdate` 在包体验收后追加离线签名更新。脚本锁定基包 100 的清单摘要，并用一次性的 Ed25519 测试密钥签发候选 101 和 102，由参考 Windows 启动器验签并选包。真实 UE 进程进入地图后读取选中版本的资源标记和存档，确认 100 和 101。版本 102 写入自己的存档副本后故意退出，下一次启动重新加载 101，并核对其存档字节。结果在 `SignedUpdate/report.json`，每次启动的日志在 `SignedUpdate/store/boots` 下。省略此开关只验收包体启动。
+
+要复测已经由本脚本生成的样板归档，可以跳过重新 Cook 和打包，直接运行以下命令。输出应使用全新短英文路径，预留约四倍包体大小另加 128 MiB 的磁盘空间，完成后保留三个版本和验收证据。
+
+```powershell
+python -X utf8 -B .\Adoption\Win64Smoke\verify_update.py `
+  --archive 'C:\Work\UE-Package-Smoke-01\Archive\Windows' `
+  --infrastructure 'C:\Work\UE-Infrastructure' `
+  --output 'C:\Work\UE-Update-Smoke-02'
+```
+
+三个版本共用一个已编译的 Win64 可执行文件和一个 PAK，各自携带不同的已签名资源标记和独立存档。真实项目仍要按[运行时手册](RUNTIME.md)用不同构建验收 C++ 和 Cook 资源一起切换，并单独验证实际存档迁移、线上下载及 Android 运行。
 
 ## 让 AI 接手集成
 
