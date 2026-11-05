@@ -9,5 +9,7 @@
 !/Adoption/README.md
 !/Adoption/AGENTS.md
 !/Adoption/Start-UEAdoption.ps1
+!/Adoption/Test-ProjectIntegration.ps1
+!/Adoption/Test-Download.ps1
 !/Adoption/NETWORK.md
 !/Adoption/RUNTIME.md

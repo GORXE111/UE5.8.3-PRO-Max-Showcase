@@ -2,6 +2,8 @@
 
 本页从能够用 UE 打开并打包的最小工程开始。先在一个测试项目和独立安装目录验证完整包，再接入签名更新。这里的参考实现使用 UE 5.8、Windows Win64 和 Android ARM64，按重启切换原生代码与 Cook 资源。公开仓库通过了脚手架、离线事务和主机测试。新项目仍需完成实际编译、Cook、进程启动和回退验收。[参考实现验收范围](https://github.com/GORXE111/UE-Game-Dev-Infrastructure/blob/2d0654e54b78aeed17161747c6deedb9dce3d0b1/docs/verification-scope.md)
 
+在自己的工程开始构建前，按[真实项目检查](README.md#检查真实项目)运行联合预检。项目检查的 `runtimeValidated` 保持为 `false`。即使源码中找到就绪确认相关标记，也需要下文的真实启动和回退证据。
+
 ## 1. 让基包先独立启动
 
 1. 用匹配的 UE 版本构建一个最小 C++ 工程，加入可操作的启动地图和一个测试存档槽。增加一个只能由新内容实现的可观察标记，例如可加载地图的内容版本。使用 Unreal Automation Tool 或编辑器完成 Build、Cook、Stage、Package，从生成的目录实际启动。记录工程提交、引擎 Build ID、平台、配置、地图清单、APK 包名或 Windows 目标名。 [Epic 打包指南](https://dev.epicgames.com/documentation/en-us/unreal-engine/packaging-your-project)

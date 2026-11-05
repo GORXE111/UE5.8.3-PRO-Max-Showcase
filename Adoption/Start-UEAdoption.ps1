@@ -3,9 +3,14 @@
 param(
     [Parameter(Mandatory)] [string] $EngineRoot,
     [Parameter(Mandatory, ParameterSetName = 'Demo')] [switch] $LocalDemo,
-    [Parameter(Mandatory, ParameterSetName = 'Demo')] [string] $InfrastructureRoot,
+    [Parameter(Mandatory, ParameterSetName = 'Demo')]
+    [Parameter(ParameterSetName = 'Project')] [string] $InfrastructureRoot,
     [Parameter(Mandatory, ParameterSetName = 'Demo')] [string] $ProjectOutput,
-    [Parameter(ParameterSetName = 'Demo')] [string] $PythonExecutable = 'python'
+    [Parameter(ParameterSetName = 'Demo')] [string] $PythonExecutable = 'python',
+    [Parameter(Mandatory, ParameterSetName = 'Project')] [string] $Project,
+    [Parameter(Mandatory, ParameterSetName = 'Project')] [ValidateSet('Win64', 'Android')] [string] $Platform,
+    [Parameter(ParameterSetName = 'Project')] [string] $ClangRoot,
+    [Parameter(ParameterSetName = 'Project')] [string] $ReadinessSource
 )
 
 $ErrorActionPreference = 'Stop'
@@ -14,6 +19,7 @@ $report = [ordered]@{
     schemaVersion = 1
     status = 'checking'
     engine = $null
+    projectIntegration = $null
     infrastructureRevision = $null
     demo = $null
     generatedProject = $null
@@ -48,16 +54,24 @@ try {
     }
     $runner = Join-Path $PSHOME 'pwsh.exe'
     $editor = Join-Path $root 'Engine/Binaries/Win64/UnrealEditor.exe'
+    $projectMode = $PSCmdlet.ParameterSetName -eq 'Project'
+    $engineReady = $true
     if (Test-Path -LiteralPath (Join-Path $root 'Engine/Build/InstalledBuild.txt') -PathType Leaf) {
         $readiness = Join-Path $PSScriptRoot '../Tools/Test-ProMaxReadiness.ps1'
-        $raw = & $runner -NoProfile -File $readiness -EngineRoot $root -Json
+        $readinessArgs = @('-EngineRoot', $root, '-Json')
+        if ($projectMode) {
+            $readinessArgs += @('-Project', (Get-LocalPath $Project), '-CheckCpp')
+            if ($ClangRoot) { $readinessArgs += @('-ClangRoot', (Get-LocalPath $ClangRoot)) }
+        }
+        $raw = & $runner -NoProfile -File $readiness @readinessArgs
         $readinessExit = $LASTEXITCODE
+        $engineReady = $readinessExit -eq 0
         $report.engine = [ordered]@{
             kind = 'installed'
             version = $versionLabel
             readiness = ($raw | Out-String | ConvertFrom-Json -AsHashtable)
         }
-        if ($readinessExit -ne 0) {
+        if (-not $engineReady -and -not $projectMode) {
             throw 'Installed engine file inspection failed. See engine.readiness.checks.'
         }
         $report.nextAction = 'Validate the C++ toolchain and compile a blank project with this editor.'
@@ -68,6 +82,7 @@ try {
             }
         }
         $editorPresent = Test-Path -LiteralPath $editor -PathType Leaf
+        $engineReady = $editorPresent
         $report.engine = [ordered]@{ kind = 'source'; version = $versionLabel; editorFilePresent = $editorPresent }
         $report.nextAction = if ($editorPresent) {
             'Verify the source build identity and run a clean editor/project build.'
@@ -76,7 +91,19 @@ try {
         }
     }
 
-    if ($LocalDemo) {
+    if ($projectMode) {
+        $projectArgs = @('-Project', (Get-LocalPath $Project), '-Platform', $Platform)
+        if ($InfrastructureRoot) { $projectArgs += @('-InfrastructureRoot', (Get-LocalPath $InfrastructureRoot)) }
+        if ($ReadinessSource) { $projectArgs += @('-ReadinessSource', $ReadinessSource) }
+        $raw = & $runner -NoProfile -File (Join-Path $PSScriptRoot 'Test-ProjectIntegration.ps1') @projectArgs
+        $projectExit = $LASTEXITCODE
+        $report.projectIntegration = $raw | Out-String | ConvertFrom-Json -AsHashtable
+        if (-not $engineReady -or $projectExit -ne 0) {
+            throw 'Resolve the blocked engine and project checks before starting a build.'
+        }
+        $report.status = 'project-inputs-inspected'
+        $report.nextAction = 'Build and run the packaged baseline. Verify project readiness and save handling in the actual game.'
+    } elseif ($LocalDemo) {
         $infrastructure = Get-LocalPath $InfrastructureRoot
         $output = Get-LocalPath $ProjectOutput
         if (Test-Path -LiteralPath $output) {

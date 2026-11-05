@@ -62,3 +62,16 @@ curl.exe -sS --max-time 30 --max-filesize 65536 -D - -o NUL -H 'Accept-Encoding:
 ```
 
 清单和签名 GET 应返回 200，整包 HEAD 的 `Content-Length` 应等于已准备的文件大小。对大于 64 KiB 的测试包，Range 探针应返回 206 及 `Content-Range: bytes 0-65535/<完整大小>`。正式整包读回还要计算完整 SHA-256 并比对发布计划和旁车文件。
+
+也可在外部 Windows 机器上用本仓库的只读脚本核对单个整包。以下命令从发布机已核验的本地 `prepared.json` 取预期值。测试域名须与该计划对应。
+
+```powershell
+$plan = Get-Content -LiteralPath 'C:/Work/TestRelease/prepared.json' -Raw | ConvertFrom-Json
+$package = @($plan.catalog.packages | Where-Object platform -eq 'Windows')
+if ($package.Count -ne 1) { throw 'Expected one Windows package in the prepared plan.' }
+pwsh -NoProfile -File .\Adoption\Test-Download.ps1 `
+  -Url ("https://updates.example.com" + $package[0].url) `
+  -ExpectedSize $package[0].size -ExpectedSha256 $package[0].sha256 -RequireImmutable
+```
+
+`verified` 表示 HEAD、206、首段字节与完整 GET 一致，整包大小和摘要与发布计划一致。`blocked` 返回退出码 1 及失败阶段。脚本走直连 HTTPS 并使用系统证书信任，验证消耗一次完整下载的流量。用实际测试域名单独验收 DNS、CDN 规则、源站隔离及发布器的整批读回。

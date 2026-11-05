@@ -41,6 +41,22 @@ pwsh -NoProfile -File .\Adoption\Start-UEAdoption.ps1 `
 
 `local-demo-passed` 表示两种平台的签名与回退夹具已通过，且生成了 `SampleGame.uproject`。夹具使用临时密钥和模拟包体。生成的工程从原生 UE 行为开始。首次编译、Cook、打包、健康确认以及真实更新属于后续接入门槛。
 
+## 检查真实项目
+
+进入构建前可用同一入口检查已安装引擎、工程编辑器模块和发行适配器。
+
+```powershell
+pwsh -NoProfile -File .\Adoption\Start-UEAdoption.ps1 `
+  -EngineRoot 'C:\UE583' -Project 'C:\Work\Game\Project\SampleGame\SampleGame.uproject' `
+  -Platform Win64
+```
+
+Android 自有 APK 改用 `-Platform Android`，并以 `-InfrastructureRoot` 指向配置了公开 Android 签名证书及证书摘要的生产工具副本。独立 Clang 安装可用 `-ClangRoot` 指定。`-ReadinessSource` 可提示 AI 查看一份启动确认源码，其检查结果仍需通过真实包体运行确认。
+
+`project-inputs-inspected` 表示所选静态检查已通过。查看 JSON 中的 `engine` 和 `projectIntegration`，可以分别处理引擎和游戏项目的阻断项。若只需检查项目，可单独运行 `Test-ProjectIntegration.ps1`。完整流程见[运行时手册](RUNTIME.md)。
+
+在已有 PRO Max 5.8.3 开发安装上，公开脚手架生成的空白工程已实际通过 `SampleGameEditor Win64 Development` 编译。生成的 DLL 对应安装版的编辑器 Build ID。Cook、打包启动、官方 Launcher UE 的项目编译，以及安卓设备运行各自需要验收。
+
 ## 让 AI 接手集成
 
 把本目录的位置交给 AI，并提供**已授权的引擎路径、游戏仓库路径、目标平台和发布渠道**。按 [AGENTS.md](AGENTS.md) 执行并给每步留可核验的结果。
@@ -58,7 +74,7 @@ pwsh -NoProfile -File .\Adoption\Start-UEAdoption.ps1 `
 | 阶段 | 工作 | 通过条件 |
 | --- | --- | --- |
 | 本机 | 预检、生成样板、离线验证签名事务 | 报告区分引擎检查、夹具结果和已生成工程 |
-| 游戏接入 | 接齐构建适配器、真实基包、PAK／Lua 加载、健康确认与存档 | 冷启动确认真实版本，破坏候选后能回到旧代码、资源和存档。[运行时手册](RUNTIME.md) |
+| 游戏接入 | 运行项目预检，接齐构建适配器、真实基包、PAK／Lua 加载、健康确认与存档 | 冷启动确认真实版本，破坏候选后能回到旧代码、资源和存档。[运行时手册](RUNTIME.md) |
 | 测试公网 | 建测试域名、TLS、CDN 防护与私有发布入口 | 从源站以外完整下载并核对摘要，验证缓存、Range、回退及源站隔离。[网络手册](NETWORK.md) |
 | 正式发布 | 切换经过验收的渠道 | 已确认权限、签名身份、完整验收记录与回退窗口 |
 
