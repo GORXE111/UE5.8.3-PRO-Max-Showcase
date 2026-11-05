@@ -25,4 +25,4 @@ pwsh -NoProfile -File .\Tools\Test-ProMaxReadiness.ps1 -EngineRoot 'C:\UE583' -P
 
 检查会读取安装结构、版本、编辑器 Build ID 和已有项目模块，并显示所在磁盘的可用空间。用 `-PluginRoot 'C:\Game\Plugins\MyPlugin'` 可单独检查插件的编辑器模块。C++ 模式还会检查编译准备条件，已有的独立 Clang 安装可用 `-ClangRoot` 指定。退出码 `0` 表示通过所选静态检查，可同时有建议项。`1` 表示存在阻断项。通过后再使用一个空白项目实际编译和 Cook。
 
-开发和发布参考实现见 [UE Game Development Infrastructure](https://github.com/GORXE111/UE-Game-Dev-Infrastructure)。分阶段验收见[开发路线](ROADMAP.md)。
+从 Epic 获取 UE、用 AI 接入签名热更新、配置公网下载和验收存档回退，见[接入目录](Adoption/README.md)。开发和发布参考实现见 [UE Game Development Infrastructure](https://github.com/GORXE111/UE-Game-Dev-Infrastructure)。分阶段验收见[开发路线](ROADMAP.md)。
