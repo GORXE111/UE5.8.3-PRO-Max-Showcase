@@ -1,4 +1,5 @@
 #include "Dom/JsonObject.h"
+#include "Engine/DataTable.h"
 #include "Engine/Engine.h"
 #include "Engine/World.h"
 #include "GenericPlatform/GenericPlatformFile.h"
@@ -14,6 +15,10 @@
 #include "Modules/ModuleManager.h"
 #include "Serialization/JsonSerializer.h"
 #include "UObject/Package.h"
+
+#if __has_include("AdoptionFixtureVersion.h")
+#include "AdoptionFixtureVersion.h"
+#endif
 
 namespace
 {
@@ -192,6 +197,20 @@ namespace
             UE_LOG(LogTemp, Error, TEXT("UE_ADOPTION_UPDATE_SMOKE_ERROR selected payload marker differs from ticket"));
             return 1;
         }
+#if defined(UE_ADOPTION_FIXTURE_RELEASE)
+        const UDataTable* Table = LoadObject<UDataTable>(nullptr,
+            TEXT("/Game/Release/AdoptionCooked.AdoptionCooked"));
+        const TArray<FName> Rows = Table ? Table->GetRowNames() : TArray<FName>();
+        const FName ExpectedRow(*FString::Printf(TEXT("Release%d"), ReleaseId));
+        if (ReleaseId != UE_ADOPTION_FIXTURE_RELEASE || Rows.Num() != 1 || Rows[0] != ExpectedRow)
+        {
+            UE_LOG(LogTemp, Error, TEXT("UE_ADOPTION_UPDATE_SMOKE_ERROR native=%d ticket=%d cooked=%s"),
+                UE_ADOPTION_FIXTURE_RELEASE, ReleaseId, Rows.Num() == 1 ? *Rows[0].ToString() : TEXT("missing or ambiguous"));
+            return 1;
+        }
+        UE_LOG(LogTemp, Display, TEXT("UE_ADOPTION_UPDATE_SMOKE_PAIR native=%d cooked=%s"),
+            UE_ADOPTION_FIXTURE_RELEASE, *Rows[0].ToString().RightChop(7));
+#endif
         if (!UpdateSaveFixture(ReleaseId))
         {
             UE_LOG(LogTemp, Error, TEXT("UE_ADOPTION_UPDATE_SMOKE_ERROR save migration failed for release %d"), ReleaseId);

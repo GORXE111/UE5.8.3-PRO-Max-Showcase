@@ -7,7 +7,8 @@ param(
     [string] $PythonExecutable = 'python',
     [string] $ClangRoot,
     [ValidateRange(1, 8)] [int] $MaxParallelActions = 2,
-    [switch] $VerifySignedUpdate
+    [switch] $VerifySignedUpdate,
+    [switch] $VerifyNativeAssetUpdate
 )
 
 $ErrorActionPreference = 'Stop'
@@ -36,7 +37,34 @@ function Get-LocalPath([string] $Path) {
     return $result
 }
 
+function Build-Package([string] $Archive, [string] $Suffix, [int] $Release) {
+    $cookOptions = @()
+    if ($Release) {
+        $report.phase = "author-asset-$Release"
+        $env:UE_ADOPTION_FIXTURE_RELEASE = [string] $Release
+        Set-Content -LiteralPath (Join-Path $sampleRoot 'Source/SampleGame/AdoptionFixtureVersion.h') `
+            -Value "#define UE_ADOPTION_FIXTURE_RELEASE $Release" -Encoding ascii
+        $assetLog = Join-Path $output "author-asset-$Release.log"
+        & $editor $project -run=PythonScript "-script=$assetScript" -EnablePlugins=PythonScriptPlugin `
+            -Unattended -NullRHI -NoSound -NoSplash -stdout -FullStdOutLogOutput *> $assetLog
+        if ($LASTEXITCODE -ne 0 -or -not (Select-String -LiteralPath $assetLog -SimpleMatch -Quiet `
+                -Pattern "UE_ADOPTION_COOKED_ASSET_WRITTEN release=$Release asset=")) {
+            throw "DataTable authoring failed. See author-asset-$Release.log."
+        }
+        if ($Release -gt 100) { $cookOptions += '-iterativecooking' }
+    }
+
+    $report.phase = "cook-and-package$Suffix"
+    & $uat BuildCookRun "-project=$project" -noP4 -platform=Win64 -clientconfig=Development -build -skipbuildeditor `
+        -cook "-map=$map" @cookOptions -stage -pak -package -archive "-archivedirectory=$Archive" -unattended -utf8output `
+        ("-ubtargs=" + ($ubtOptions -join ' ')) *> (Join-Path $output "package$Suffix.log")
+    $report.uatExitCode = $LASTEXITCODE
+    if ($report.uatExitCode -ne 0) { throw "BuildCookRun failed. See package$Suffix.log." }
+    return (Join-Path $Archive 'Windows')
+}
+
 $previousLlvm = $env:LLVM_PATH
+$previousFixtureRelease = $env:UE_ADOPTION_FIXTURE_RELEASE
 try {
     if (-not $IsWindows) { throw 'The package smoke needs a Windows host and a Win64 Installed Build.' }
     $engine = Get-LocalPath $EngineRoot
@@ -58,6 +86,7 @@ try {
     $report.editorBuildId = ($engineCheck | ConvertFrom-Json).editorBuildId
     $build = Join-Path $engine 'Engine/Build/BatchFiles/Build.bat'
     $uat = Join-Path $engine 'Engine/Build/BatchFiles/RunUAT.bat'
+    $editor = Join-Path $engine 'Engine/Binaries/Win64/UnrealEditor-Cmd.exe'
     $map = '/Engine/Maps/Entry'
     foreach ($file in @($build, $uat, (Join-Path $engine 'Engine/Content/Maps/Entry.umap'))) {
         if (-not (Test-Path -LiteralPath $file -PathType Leaf)) { throw "Missing Win64 package input $file" }
@@ -75,6 +104,11 @@ try {
     $report.infrastructureRevision = $local.infrastructureRevision
     $project = $local.generatedProject
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'Win64Smoke/SampleGame.cpp') -Destination (Join-Path $sampleRoot 'Source/SampleGame/SampleGame.cpp')
+    if ($VerifyNativeAssetUpdate) {
+        if (-not (Test-Path -LiteralPath $editor -PathType Leaf)) { throw 'Native and asset verification requires UnrealEditor-Cmd.exe.' }
+        $assetScript = Join-Path $output 'Write-AdoptionCookedAsset.py'
+        Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'Win64Smoke/Write-AdoptionCookedAsset.py') -Destination $assetScript
+    }
     $moduleRules = Join-Path $sampleRoot 'Source/SampleGame/SampleGame.Build.cs'
     $dependencies = '        PublicDependencyModuleNames.AddRange(new[] { "Core", "CoreUObject", "Engine" });'
     $rules = Get-Content -LiteralPath $moduleRules -Raw
@@ -94,6 +128,9 @@ bUseIoStore=False
 bUseZenStore=False
 bGenerateChunks=False
 '@
+    if ($VerifyNativeAssetUpdate) {
+        Add-Content -LiteralPath (Join-Path $config 'DefaultGame.ini') -Value '+DirectoriesToAlwaysCook=(Path="/Game/Release")'
+    }
 
     $report.phase = 'editor-build'
     & $build SampleGameEditor Win64 Development "-Project=$project" @ubtOptions -NoHotReload *> (Join-Path $output 'editor-build.log')
@@ -102,14 +139,9 @@ bGenerateChunks=False
     $modules = Get-Content -LiteralPath (Join-Path $sampleRoot 'Binaries/Win64/UnrealEditor.modules') -Raw | ConvertFrom-Json
     if ($modules.BuildId -cne $report.editorBuildId) { throw 'Editor and project module Build IDs differ.' }
 
-    $report.phase = 'cook-and-package'
-    $archive = Join-Path $output 'Archive'
-    & $uat BuildCookRun "-project=$project" -noP4 -platform=Win64 -clientconfig=Development -build -skipbuildeditor `
-        -cook "-map=$map" -stage -pak -package -archive "-archivedirectory=$archive" -unattended -utf8output `
-        ("-ubtargs=" + ($ubtOptions -join ' ')) *> (Join-Path $output 'package.log')
-    $report.uatExitCode = $LASTEXITCODE
-    if ($report.uatExitCode -ne 0) { throw 'BuildCookRun failed. See package.log.' }
-    $payload = Join-Path $archive 'Windows'
+    $baseRelease = 0
+    if ($VerifyNativeAssetUpdate) { $baseRelease = 100 }
+    $payload = Build-Package (Join-Path $output 'Archive') '' $baseRelease
     $game = Join-Path $payload 'SampleGame/Binaries/Win64/SampleGame.exe'
     $paks = @(Get-ChildItem -LiteralPath (Join-Path $payload 'SampleGame/Content/Paks') -File -Filter '*.pak')
     if (-not (Test-Path -LiteralPath $game -PathType Leaf) -or $paks.Count -eq 0) {
@@ -143,16 +175,25 @@ bGenerateChunks=False
     }
     $report.worldReady = $true
     $report.status = 'win64-package-smoke-passed'
-    if ($VerifySignedUpdate) {
+    if ($VerifySignedUpdate -or $VerifyNativeAssetUpdate) {
+        $variantArgs = @()
+        if ($VerifyNativeAssetUpdate) {
+            foreach ($release in @(101, 102)) {
+                $candidate = Build-Package (Join-Path $output "Archive-$release") "-$release" $release
+                $variantArgs += @('--candidate-archive', "$release=$candidate")
+            }
+        }
         $report.phase = 'signed-update'
         $python = (Get-Command -Name $PythonExecutable -CommandType Application | Select-Object -First 1).Source
         $updateOutput = Join-Path $output 'SignedUpdate'
         $updateLog = Join-Path $output 'signed-update.log'
         & $python -X utf8 -B (Join-Path $PSScriptRoot 'Win64Smoke/verify_update.py') `
-            --archive $payload --infrastructure $infrastructure --output $updateOutput *> $updateLog
+            --archive $payload --infrastructure $infrastructure --output $updateOutput @variantArgs *> $updateLog
         if ($LASTEXITCODE -ne 0) { throw 'Signed update verification failed. See signed-update.log.' }
         $report.signedUpdateReport = Join-Path $updateOutput 'report.json'
-        if ((Get-Content -LiteralPath $report.signedUpdateReport -Raw | ConvertFrom-Json).status -cne 'win64-signed-update-passed') {
+        $signed = Get-Content -LiteralPath $report.signedUpdateReport -Raw | ConvertFrom-Json
+        if ($signed.status -cne 'win64-signed-update-passed' -or
+            ($VerifyNativeAssetUpdate -and $signed.sameExeAndPaksAcrossReleases -ne $false)) {
             throw 'Signed update verification did not report success.'
         }
         $report.status = 'win64-signed-update-passed'
@@ -163,6 +204,7 @@ bGenerateChunks=False
     $report.error = $_.Exception.Message
 } finally {
     $env:LLVM_PATH = $previousLlvm
+    $env:UE_ADOPTION_FIXTURE_RELEASE = $previousFixtureRelease
 }
 
 $report | ConvertTo-Json -Depth 5

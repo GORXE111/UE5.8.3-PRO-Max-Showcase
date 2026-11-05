@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -14,6 +15,8 @@ from threading import Timer
 
 INFRASTRUCTURE_REVISION = "2d0654e54b78aeed17161747c6deedb9dce3d0b1"
 ENTRY = "SampleGame/Binaries/Win64/SampleGame.exe"
+MAIN_PAK = "SampleGame/Content/Paks/SampleGame-Windows.pak"
+COOKED_ASSET = "SampleGame/Content/Release/AdoptionCooked.uasset"
 MARKER = "SampleGame/Content/Release/adoption-version.json"
 SAVE = "Saved/SaveGames/AdoptionUpdateSmoke.txt"
 MAX_PAYLOAD = 2 * 1024**3
@@ -95,7 +98,7 @@ def save_bytes(selected, sets):
     return sets.read_bounded(sets.child(selected["savesRoot"], SAVE), 16)
 
 
-def verify_boot(store, selected, release, player, sets):
+def verify_boot(store, selected, release, player, sets, expected_pair):
     require(selected["reference"]["releaseId"] == release, f"Expected release {release} at boot")
     process = None
     watchdog = None
@@ -123,8 +126,22 @@ def verify_boot(store, selected, release, player, sets):
     boot = sets.child(store.root, f"boots/{selected['attemptId']}")
     result = sets.parse(sets.read_bounded(boot / "result.json", 16384), 16384)
     log = sets.read_bounded(boot / "game.log", 8 * 1024**2).decode("utf-8-sig", errors="replace")
-    require(any(f"Mounted Pak file '../../../{item['path']}'" in log for item in selected["manifest"]["files"]
-                if item["role"] == "content"), f"Release {release} did not log a packaged SampleGame PAK mount")
+    files = selected["manifest"]["files"]
+    require(any(f"Mounted Pak file '../../../{item['path']}'" in log for item in files
+                if item["role"] == "content" and (expected_pair is None or item["path"] == MAIN_PAK)),
+            f"Release {release} did not log the expected SampleGame PAK mount")
+    pair_evidence = {}
+    if expected_pair is not None:
+        hashes = {item["path"]: item["sha256"] for item in files}
+        require(hashes.get(ENTRY) == expected_pair["executableSha256"]
+                and hashes.get(MAIN_PAK) == expected_pair["pakSha256"],
+                f"Release {release} did not select its signed executable and PAK pair")
+        pairs = re.findall(r"(?m)LogTemp: Display: UE_ADOPTION_UPDATE_SMOKE_PAIR native=([0-9]+) cooked=([0-9]+)\r?$", log)
+        require(pairs == [(str(release), str(release))],
+                f"Release {release} did not log one matching compiled and cooked release identity")
+        native, cooked = map(int, pairs[0])
+        pair_evidence = dict(nativeRelease=native, cookedRelease=cooked,
+                             executableSha256=hashes[ENTRY], pakSha256=hashes[MAIN_PAK])
     written_save = save_bytes(selected, sets)
     require(written_save == f"{release}\n".encode("ascii"),
             f"Release {release} did not write its expected save bytes")
@@ -148,51 +165,67 @@ def verify_boot(store, selected, release, player, sets):
     return dict(releaseId=release, attemptId=selected["attemptId"], exitCode=expected_exit,
                 manifestSha256=selected["reference"]["manifestSha256"], buildId=selected["manifest"]["buildId"],
                 saveGeneration=selected["reference"]["saveGeneration"], saveBytes=written_save.decode("ascii"),
-                evidence=boot.relative_to(store.root.parent).as_posix(), launcherStatus=result["status"])
+                evidence=boot.relative_to(store.root.parent).as_posix(), launcherStatus=result["status"], **pair_evidence)
 
 
-def run(archive, infrastructure, output, report):
+def run(archives, infrastructure, output, report):
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
     from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
     sets, player = load_infrastructure(infrastructure)
-    records, total = payload_inventory(archive, sets)
-    require(shutil.disk_usage(output).free >= 4 * total + FREE_RESERVE,
+    variant_mode = len(archives) > 1
+    inventories = {release: payload_inventory(path, sets) for release, path in archives.items()}
+    base_records, base_size = inventories[100]
+    sizes = [inventories.get(release, inventories[100])[1] for release in (100, 101, 102)]
+    require(shutil.disk_usage(output).free >= sum(sizes) + max(sizes) + FREE_RESERVE,
             "Insufficient free space for three complete releases and one temporary staging copy")
-    native_hash = next(item["sha256"] for item in records if item["path"] == ENTRY)
+    native_hash = next(item["sha256"] for item in base_records if item["path"] == ENTRY)
+    pairs = {}
+    if variant_mode:
+        for release, (records, size) in inventories.items():
+            hashes = {item["path"]: item["sha256"] for item in records}
+            require(MAIN_PAK in hashes, f"Release {release} is missing {MAIN_PAK}")
+            require(all(path.lower() != COOKED_ASSET.lower() for path in hashes),
+                    f"Release {release} contains a loose copy of the cooked proof asset")
+            pairs[release] = dict(executableSha256=hashes[ENTRY], pakSha256=hashes[MAIN_PAK], packagedPayloadBytes=size)
+        for field in ("executableSha256", "pakSha256"):
+            require(len({pair[field] for pair in pairs.values()}) == len(pairs),
+                    f"The base and both candidates must have distinct {field} values")
+        report["releaseArchives"] = pairs
     trust = dict(projectId="SampleGame", platform="Windows", channel="adoption-smoke", baseReleaseId=100,
                  engineBuildId="win64-adoption-fixture", shellCompatibilityId=native_hash, loaderVersion=1)
     private_key = Ed25519PrivateKey.generate()
     public_key = private_key.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw).hex()
     verifier = sets.ed25519_verifier(public_key)
     report.update(infrastructureRevision=INFRASTRUCTURE_REVISION, publicKeyHex=public_key,
-                  packagedExeSha256=native_hash, packagedPayloadBytes=total, sameExeAndPaksAcrossReleases=True)
+                  packagedExeSha256=native_hash, packagedPayloadBytes=base_size, sameExeAndPaksAcrossReleases=not variant_mode)
     store_root = output / "store"
 
-    with TemporaryDirectory(prefix="stage-", dir=output) as scratch:
-        source = Path(scratch)
-        for item in records:
-            target = sets.child(source, item["path"])
-            target.parent.mkdir(parents=True, exist_ok=True)
-            sets.copy_verified_payload(sets.child(archive, item["path"]), target, item)
-
-        base = fixture_manifest(source, records, trust, 100, native_hash, sets)
-        trust["baseManifestSha256"] = hashlib.sha256(base).hexdigest()
-        report["baseManifestSha256"] = trust["baseManifestSha256"]
-        with sets.ReleaseSetStore(store_root, trust, verifier).lease() as store:
-            store.initialize(source, base)
-            selected = store.boot()
-            report["boots"].append(verify_boot(store, selected, 100, player, sets))
-
-        for release in (101, 102):
-            raw = fixture_manifest(source, records, trust, release, native_hash, sets)
+    for release in (100, 101, 102):
+        archive = archives.get(release, archives[100])
+        records, _ = inventories.get(release, inventories[100])
+        release_native_hash = pairs[release]["executableSha256"] if variant_mode else native_hash
+        with TemporaryDirectory(prefix="stage-", dir=output) as scratch:
+            source = Path(scratch)
+            for item in records:
+                target = sets.child(source, item["path"])
+                target.parent.mkdir(parents=True, exist_ok=True)
+                sets.copy_verified_payload(sets.child(archive, item["path"]), target, item)
+            raw = fixture_manifest(source, records, trust, release, release_native_hash, sets)
+            if release == 100:
+                trust["baseManifestSha256"] = hashlib.sha256(raw).hexdigest()
+                report["baseManifestSha256"] = trust["baseManifestSha256"]
             with sets.ReleaseSetStore(store_root, trust, verifier).lease() as store:
-                store.stage(source, raw, private_key.sign(raw))
-                store.activate(release)
+                if release == 100:
+                    store.initialize(source, raw)
+                else:
+                    store.stage(source, raw, private_key.sign(raw))
+                    store.activate(release)
                 selected = store.boot()
-                require(save_bytes(selected, sets) == f"{release - 1}\n".encode("ascii"),
-                        f"Release {release} did not inherit its predecessor's save bytes")
-                report["boots"].append(verify_boot(store, selected, release, player, sets))
+                if release != 100:
+                    require(save_bytes(selected, sets) == f"{release - 1}\n".encode("ascii"),
+                            f"Release {release} did not inherit its predecessor's save bytes")
+                report["boots"].append(verify_boot(store, selected, release, player, sets, pairs.get(release)))
                 if release == 101:
                     confirmed = selected
 
@@ -202,7 +235,7 @@ def run(archive, infrastructure, output, report):
         recovered = store.boot()
         require(recovered["reference"] == confirmed["reference"] and save_bytes(recovered, sets) == b"101\n",
                 "Cold recovery did not select the prior signed release and its exact save generation")
-        report["boots"].append(verify_boot(store, recovered, 101, player, sets))
+        report["boots"].append(verify_boot(store, recovered, 101, player, sets, pairs.get(101)))
         state = sets.parse(sets.read_bounded(store_root / "state.json", 65536), 65536)
         require(state["active"] == confirmed["reference"] and state["blocked"] == [102] and state["boot"] is None,
                 "Release store did not retain confirmed recovery and block the failed release")
@@ -213,6 +246,8 @@ def run(archive, infrastructure, output, report):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--archive", type=Path, required=True, help="UAT Archive/Windows for the adoption sample")
+    parser.add_argument("--candidate-archive", action="append", default=[], metavar="RELEASE=PATH",
+                        help="UAT Archive/Windows for a different build; supply both 101=PATH and 102=PATH")
     parser.add_argument("--infrastructure", type=Path, required=True, help="Pinned infrastructure checkout")
     parser.add_argument("--output", type=Path, required=True, help="New directory for the disposable store and report")
     args = parser.parse_args()
@@ -220,14 +255,24 @@ def main():
     output_created = False
     try:
         require(os.name == "nt", "The packaged Win64 smoke requires Windows")
-        archive = args.archive.absolute()
+        archives = {100: args.archive.absolute()}
+        for candidate in args.candidate_archive:
+            release, separator, path = candidate.partition("=")
+            require(separator and release in {"101", "102"} and path,
+                    "Use --candidate-archive 101=PATH and --candidate-archive 102=PATH")
+            release_id = int(release)
+            require(release_id not in archives, f"Duplicate archive for release {release_id}")
+            archives[release_id] = Path(path).absolute()
+        require(len(archives) in {1, 3}, "Supply both candidate archives or neither")
         infrastructure = args.infrastructure.resolve(strict=True)
         output = args.output.resolve()
-        require(not output.is_relative_to(archive.resolve(strict=True)) and not output.is_relative_to(infrastructure),
-                "Output must be outside the archive and the infrastructure checkout")
+        resolved_archives = {path.resolve(strict=True) for path in archives.values()}
+        require(len(resolved_archives) == len(archives), "Provide a separate archive for each release")
+        require(all(not output.is_relative_to(path) for path in resolved_archives) and not output.is_relative_to(infrastructure),
+                "Output must be outside the archives and the infrastructure checkout")
         output.mkdir()
         output_created = True
-        run(archive, infrastructure, output, report)
+        run(archives, infrastructure, output, report)
     except (OSError, ValueError, ImportError, subprocess.SubprocessError) as error:
         report.update(error=str(error))
     rendered = json.dumps(report, indent=2, ensure_ascii=True) + "\n"
