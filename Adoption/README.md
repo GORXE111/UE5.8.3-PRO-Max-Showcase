@@ -108,6 +108,10 @@ python -X utf8 -B .\Adoption\Win64Smoke\verify_feed.py `
 
 验收覆盖下载损坏时拒绝激活、修正后重试成功、故障候选回退及原存档恢复。`report.json` 保存请求与已发送字节、游戏启动回执和恢复结果。公网 DNS、CDN 缓存、外网下载及带宽仍按[网络手册](NETWORK.md)验收。
 
+## 独立配置表和 Jenkins
+
+基础设施仓库提供不依赖 UE 的打表工具和 Windows 构建门禁，并可在自备 UE 编辑器检查资源。配置表、脚手架和离线签名样板可在同一入口运行。 [配置表、资源检查和 Jenkins](https://github.com/GORXE111/UE-Game-Dev-Infrastructure/blob/main/docs/config-and-ci.md)
+
 ## 让 AI 接手集成
 
 把本目录的位置交给 AI，并提供**已授权的引擎路径、游戏仓库路径、目标平台和发布渠道**。按 [AGENTS.md](AGENTS.md) 执行并给每步留可核验的结果。

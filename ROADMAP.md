@@ -2,6 +2,8 @@
 
 按外部开发者从获得工具到做出第一个可运行包的顺序推进。评估依据和缺口见[技术与采用评估](ASSESSMENT.md)。
 
+独立接入按配置表与 Jenkins 门禁、项目描述与资源校验、客户端和专用服务器构建、签名发布与公网读回推进。可执行工具在基础设施仓库维护。 [独立开发者接入路线](https://github.com/GORXE111/UE-Game-Dev-Infrastructure/blob/main/docs/developer-adoption.md)
+
 | 优先级 | 工作 | 通过条件 |
 | --- | --- | --- |
 | 已落地 | 接入预检、Win64 包体与下载核验 | 引擎和项目的静态检查输出 JSON。最小样板已在 PRO Max 上完成 Win64 Cook、打包和归档启动。下载与清单探针覆盖整包摘要、活动版本字节及缓存规则 |
