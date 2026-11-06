@@ -110,7 +110,9 @@ python -X utf8 -B .\Adoption\Win64Smoke\verify_feed.py `
 
 ## 独立配置表和 Jenkins
 
-基础设施仓库提供不依赖 UE 的打表工具和 Windows 构建门禁，并可在自备 UE 编辑器检查资源。配置表、脚手架和离线签名样板可在同一入口运行。 [配置表、资源检查和 Jenkins](https://github.com/GORXE111/UE-Game-Dev-Infrastructure/blob/main/docs/config-and-ci.md)
+基础设施仓库提供 CSV 与 Excel／WPS XLSX 打表工具和 Windows 构建门禁，并可在自备 UE 编辑器检查资源。配置表、脚手架和离线签名样板可在同一入口运行。 [配置表、资源检查和 Jenkins](https://github.com/GORXE111/UE-Game-Dev-Infrastructure/blob/main/docs/config-and-ci.md)
+
+用一份项目配置声明 `.uproject`、表目录、资源、地图和 Targets，即可复用打表、Cook、PAK 检查和无头启动。独立 Win64 样板已在 PRO Max 5.8.3 用 XLSX 完整跑通。 [项目配置与包体验收](https://github.com/GORXE111/UE-Game-Dev-Infrastructure/blob/main/docs/project-profile.md)
 
 ## 让 AI 接手集成
 
